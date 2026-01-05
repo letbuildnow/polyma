@@ -1,54 +1,21 @@
 """
-REPLIT-OPTIMIZED POLYMARKET BOT
-Ready to deploy on replit.com
-Includes keep-alive server to prevent sleeping
+RAILWAY-OPTIMIZED POLYMARKET BOT
+Clean version without keep-alive hacks
+Railway handles the infrastructure automatically
 """
 
-# ============ KEEP-ALIVE SERVER (For Replit Free Tier) ============
-from flask import Flask
-from threading import Thread
-import os
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return """
-    <html>
-        <body style="font-family: Arial; padding: 40px; background: #0f0f23; color: #00ff00;">
-            <h1>🤖 Polymarket Bot Status</h1>
-            <p style="font-size: 20px;">✅ Bot is running!</p>
-            <p>This page keeps the bot alive on Replit's free tier.</p>
-            <p style="color: #888; margin-top: 40px;">
-                Tip: Add this URL to UptimeRobot.com to ping it every 5 minutes
-            </p>
-        </body>
-    </html>
-    """
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-def keep_alive():
-    t = Thread(target=run_flask, daemon=True)
-    t.start()
-    print("✅ Keep-alive server started on port 8080")
-
-# Start the keep-alive server
-keep_alive()
-
-# ============ NOW THE ACTUAL BOT CODE ============
 import requests
 import time
 from collections import deque
 import statistics
 from datetime import datetime
-import json
+import os
 import hashlib
 
 # ============ CONFIGURATION ============
-TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', 'YOUR_CHAT_ID_HERE')
+# Railway automatically loads these from environment variables
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
 CHECK_INTERVAL = 120
 VOLUME_SPIKE_THRESHOLD = 2.2
@@ -61,7 +28,6 @@ MIN_LIQUIDITY = 10000
 TARGET_MARKET_COUNT = 7
 
 ENABLE_TELEGRAM = True
-ENABLE_ML_SCORING = True
 MIN_CONFIDENCE_ALERT = 0.65
 
 # ============ TELEGRAM NOTIFICATIONS ============
@@ -69,7 +35,7 @@ class TelegramNotifier:
     def __init__(self, bot_token, chat_id, enabled=True):
         self.bot_token = bot_token
         self.chat_id = chat_id
-        self.enabled = enabled and bot_token != "YOUR_BOT_TOKEN_HERE"
+        self.enabled = enabled and bot_token
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
         
         if self.enabled:
@@ -79,13 +45,17 @@ class TelegramNotifier:
         try:
             response = requests.get(f"{self.base_url}/getMe", timeout=5)
             if response.status_code == 200:
-                print("✅ Telegram connected successfully")
+                bot_info = response.json()
+                print(f"✅ Telegram connected: @{bot_info['result']['username']}")
+                return True
             else:
                 print("⚠️  Telegram credentials invalid")
                 self.enabled = False
+                return False
         except Exception as e:
             print(f"⚠️  Telegram connection failed: {e}")
             self.enabled = False
+            return False
     
     def send_alert(self, message, priority="normal"):
         if not self.enabled:
@@ -95,10 +65,20 @@ class TelegramNotifier:
         formatted_msg = f"{emoji_map.get(priority, '•')} {message}"
         
         try:
-            payload = {"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "HTML"}
-            requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=5)
+            payload = {
+                "chat_id": self.chat_id,
+                "text": formatted_msg,
+                "parse_mode": "HTML"
+            }
+            response = requests.post(
+                f"{self.base_url}/sendMessage", 
+                json=payload, 
+                timeout=10
+            )
+            return response.status_code == 200
         except Exception as e:
-            print(f"Telegram send failed: {e}")
+            print(f"❌ Telegram send failed: {e}")
+            return False
 
 # ============ ADVANCED PATTERN ANALYZER ============
 class AdvancedPatternAnalyzer:
@@ -130,7 +110,11 @@ class AdvancedPatternAnalyzer:
         if len(price_history) >= 10:
             scores['acceleration'] = self._calculate_acceleration(price_history)
         
-        total_score = sum(scores.get(key, 0) * weight for key, weight in self.pattern_weights.items())
+        total_score = sum(
+            scores.get(key, 0) * weight 
+            for key, weight in self.pattern_weights.items()
+        )
+        
         signal_count = len(signals)
         confluence_bonus = min(0.15, (signal_count - 1) * 0.05)
         
@@ -141,7 +125,10 @@ class AdvancedPatternAnalyzer:
         velocities = [recent[i] - recent[i-1] for i in range(1, len(recent))]
         
         if len(velocities) >= 2:
-            accelerations = [velocities[i] - velocities[i-1] for i in range(1, len(velocities))]
+            accelerations = [
+                velocities[i] - velocities[i-1] 
+                for i in range(1, len(velocities))
+            ]
             avg_accel = sum(accelerations) / len(accelerations)
             return min(1.0, abs(avg_accel) * 100)
         return 0
@@ -160,7 +147,10 @@ class AdvancedPatternAnalyzer:
         
         if len(price_history) >= 5:
             recent = list(price_history)[-5:]
-            trend = sum(1 if recent[i] > recent[i-1] else -1 for i in range(1, 5))
+            trend = sum(
+                1 if recent[i] > recent[i-1] else -1 
+                for i in range(1, 5)
+            )
             direction_score += trend * 0.3
         
         if direction_score > 0.5:
@@ -183,15 +173,21 @@ class MarketDiscovery:
         if cache_key in self.cache:
             cached_time, cached_data = self.cache[cache_key]
             if time.time() - cached_time < self.cache_duration:
+                print("📦 Using cached market list")
                 return cached_data
         
         print("🔍 Discovering optimal markets...")
         
         try:
             url = f"{self.gamma_api}/markets"
-            params = {'active': 'true', 'closed': 'false', 'limit': 100}
+            params = {
+                'active': 'true',
+                'closed': 'false',
+                'limit': 100
+            }
             
             response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
             markets = response.json()
             
             candidates = []
@@ -221,6 +217,8 @@ class MarketDiscovery:
             selected = candidates[:TARGET_MARKET_COUNT]
             
             print(f"✅ Found {len(selected)} optimal markets")
+            for i, m in enumerate(selected, 1):
+                print(f"   {i}. {m['question'][:55]}...")
             
             result_ids = [(m['token_id'], m['question']) for m in selected]
             self.cache[cache_key] = (time.time(), result_ids)
@@ -243,12 +241,15 @@ class MarketTracker:
         self.question = question
         self.price_history = deque(maxlen=HISTORY_WINDOW)
         self.volume_history = deque(maxlen=HISTORY_WINDOW)
+        self.last_update = None
         self.analyzer = AdvancedPatternAnalyzer()
+        self.consecutive_errors = 0
         
     def fetch_market_data(self):
         try:
             url = f"https://clob.polymarket.com/book?token_id={self.token_id}"
             response = requests.get(url, timeout=10)
+            response.raise_for_status()
             data = response.json()
             
             if data.get('bids') and data.get('asks'):
@@ -260,14 +261,20 @@ class MarketTracker:
                 ask_volume = sum(float(a['size']) for a in data['asks'][:15])
                 total_volume = bid_volume + ask_volume
                 
+                self.consecutive_errors = 0  # Reset error counter
+                
                 return {
                     'price': mid_price,
                     'volume': total_volume,
                     'spread': best_ask - best_bid,
-                    'imbalance': (bid_volume - ask_volume) / max(total_volume, 1)
+                    'imbalance': (bid_volume - ask_volume) / max(total_volume, 1),
+                    'bid_depth': len(data['bids']),
+                    'ask_depth': len(data['asks'])
                 }
-        except:
-            pass
+        except Exception as e:
+            self.consecutive_errors += 1
+            if self.consecutive_errors <= 3:
+                print(f"⚠️  Error fetching {self.token_id[:8]}: {e}")
         return None
     
     def update(self):
@@ -277,6 +284,7 @@ class MarketTracker:
             
         self.price_history.append(data['price'])
         self.volume_history.append(data['volume'])
+        self.last_update = time.time()
         
         if len(self.price_history) < 10:
             return None
@@ -286,42 +294,68 @@ class MarketTracker:
     def analyze_patterns(self, current):
         signals = []
         
+        # Volume Spike Detection
         if len(self.volume_history) >= 5:
             recent_avg = statistics.mean(list(self.volume_history)[-5:])
             if recent_avg > 0 and current['volume'] > recent_avg * VOLUME_SPIKE_THRESHOLD:
                 signals.append({
                     'type': 'VOLUME_SPIKE',
                     'strength': current['volume'] / recent_avg,
-                    'msg': f"Volume spike: {current['volume']/recent_avg:.1f}x"
+                    'msg': f"Volume spike: {current['volume']/recent_avg:.1f}x average"
                 })
         
+        # Multi-timeframe Momentum
         if len(self.price_history) >= 10:
             short_term = list(self.price_history)[-3:]
+            mid_term = list(self.price_history)[-7:]
+            
             short_change = (short_term[-1] - short_term[0]) / max(short_term[0], 0.01)
+            mid_change = (mid_term[-1] - mid_term[0]) / max(mid_term[0], 0.01)
             
             if abs(short_change) > PRICE_MOMENTUM_THRESHOLD:
+                is_accelerating = abs(short_change) > abs(mid_change)
+                
                 signals.append({
                     'type': 'MOMENTUM',
                     'direction': 'UP' if short_change > 0 else 'DOWN',
                     'strength': abs(short_change),
-                    'msg': f"Momentum {short_change*100:+.1f}%"
+                    'accelerating': is_accelerating,
+                    'msg': f"{'Accelerating' if is_accelerating else 'Steady'} momentum {short_change*100:+.1f}%"
                 })
         
+        # Order Book Imbalance
         if abs(current['imbalance']) > 0.3:
             side = 'BUY' if current['imbalance'] > 0 else 'SELL'
             signals.append({
                 'type': 'IMBALANCE',
                 'direction': side,
                 'strength': abs(current['imbalance']),
-                'msg': f"Book favors {side}"
+                'msg': f"Order book: {abs(current['imbalance'])*100:.0f}% {side} side"
             })
         
+        # Tight Spread
         if current['spread'] < 0.02:
-            signals.append({'type': 'TIGHT_SPREAD', 'msg': "Tight spread"})
+            signals.append({
+                'type': 'TIGHT_SPREAD',
+                'msg': f"Tight spread: {current['spread']*100:.2f}%"
+            })
+        
+        # Deep Book
+        total_depth = current['bid_depth'] + current['ask_depth']
+        if total_depth > 30:
+            signals.append({
+                'type': 'DEEP_BOOK',
+                'msg': f"Deep order book: {total_depth} levels"
+            })
         
         if signals:
-            confidence = self.analyzer.calculate_confidence(signals, self.price_history, self.volume_history)
-            direction, dir_conf = self.analyzer.predict_direction(signals, self.price_history)
+            confidence = self.analyzer.calculate_confidence(
+                signals, self.price_history, self.volume_history
+            )
+            
+            direction, dir_confidence = self.analyzer.predict_direction(
+                signals, self.price_history
+            )
             
             return {
                 'token_id': self.token_id,
@@ -330,82 +364,152 @@ class MarketTracker:
                 'signals': signals,
                 'confidence': confidence,
                 'predicted_direction': direction,
-                'direction_confidence': dir_conf,
+                'direction_confidence': dir_confidence,
                 'timestamp': time.time()
             }
         
         return None
 
 # ============ MAIN BOT ============
-class AdvancedPolymarketBot:
+class RailwayPolymarketBot:
     def __init__(self):
         self.discovery = MarketDiscovery()
         self.trackers = []
-        self.telegram = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENABLE_TELEGRAM)
+        self.telegram = TelegramNotifier(
+            TELEGRAM_BOT_TOKEN, 
+            TELEGRAM_CHAT_ID, 
+            ENABLE_TELEGRAM
+        )
         self.cycle = 0
         self.last_discovery = 0
         self.discovery_interval = 3600
         self.alert_history = set()
+        self.start_time = time.time()
         
     def initialize(self):
-        print("🤖 POLYMARKET BOT v2.0 (Replit Edition)")
-        print("=" * 60)
-        self.telegram.send_alert("🤖 Bot started on Replit", "info")
+        print("\n" + "="*60)
+        print("🚂 POLYMARKET BOT - RAILWAY EDITION")
+        print("="*60)
+        print(f"Telegram: {'✅ Connected' if self.telegram.enabled else '❌ Not configured'}")
+        print(f"Check Interval: {CHECK_INTERVAL}s")
+        print(f"Min Confidence: {MIN_CONFIDENCE_ALERT*100:.0f}%")
+        print("="*60 + "\n")
+        
+        if self.telegram.enabled:
+            self.telegram.send_alert(
+                "🚂 Bot deployed on Railway and monitoring markets", 
+                "info"
+            )
+        
         self.refresh_markets()
     
     def refresh_markets(self):
         market_data = self.discovery.discover_markets()
+        
         if not market_data:
+            print("⚠️  No markets found, will retry next cycle")
             return
         
-        self.trackers = [MarketTracker(tid, q) for tid, q in market_data]
+        self.trackers = [
+            MarketTracker(token_id, question) 
+            for token_id, question in market_data
+        ]
+        
         self.last_discovery = time.time()
-        print(f"✅ Monitoring {len(self.trackers)} markets\n")
+        print(f"\n✅ Now monitoring {len(self.trackers)} markets\n")
     
     def run(self):
         self.initialize()
         
         while True:
-            self.cycle += 1
-            now = time.time()
-            
-            if now - self.last_discovery > self.discovery_interval:
-                print("\n🔄 Refreshing markets...")
-                self.refresh_markets()
-            
-            print(f"\n[Cycle {self.cycle}] {datetime.now().strftime('%H:%M:%S')}")
-            
-            for tracker in self.trackers:
-                result = tracker.update()
-                if result and result['confidence'] >= MIN_CONFIDENCE_ALERT:
-                    self.handle_signal(result)
-            
-            time.sleep(CHECK_INTERVAL)
+            try:
+                self.cycle += 1
+                now = time.time()
+                
+                # Refresh market list every hour
+                if now - self.last_discovery > self.discovery_interval:
+                    print("\n🔄 Refreshing market list...")
+                    self.refresh_markets()
+                
+                # Status update
+                uptime = (now - self.start_time) / 3600
+                print(f"\n[Cycle {self.cycle}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Uptime: {uptime:.1f}h | Tracking: {len(self.trackers)} markets")
+                print("-" * 60)
+                
+                # Scan all markets
+                signals_found = 0
+                for tracker in self.trackers:
+                    result = tracker.update()
+                    if result and result['confidence'] >= MIN_CONFIDENCE_ALERT:
+                        self.handle_signal(result)
+                        signals_found += 1
+                
+                if signals_found == 0:
+                    print("✓ No high-confidence signals this cycle")
+                
+                print(f"\n⏳ Next check in {CHECK_INTERVAL}s...")
+                time.sleep(CHECK_INTERVAL)
+                
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                print(f"\n❌ Error in main loop: {e}")
+                print("Continuing in 30 seconds...")
+                time.sleep(30)
     
     def handle_signal(self, result):
-        alert_id = hashlib.md5(f"{result['token_id']}{result['confidence']:.2f}".encode()).hexdigest()[:8]
+        # Create unique alert ID to prevent spam
+        alert_id = hashlib.md5(
+            f"{result['token_id']}{result['confidence']:.2f}".encode()
+        ).hexdigest()[:8]
         
+        # Check if we already alerted recently
         if alert_id in self.alert_history:
             return
         
         self.alert_history.add(alert_id)
         
-        print(f"\n🚨 Signal: {result['question'][:50]}")
-        print(f"Confidence: {result['confidence']*100:.1f}%")
+        # Clean old alerts (keep only last 50)
+        if len(self.alert_history) > 50:
+            self.alert_history = set(list(self.alert_history)[-50:])
         
+        # Console output
+        print(f"\n{'='*60}")
+        print("🚨 HIGH CONFIDENCE SIGNAL DETECTED")
+        print(f"{'='*60}")
+        print(f"Market: {result['question']}")
+        print(f"Price: ${result['price']:.3f}")
+        print(f"Confidence: {result['confidence']*100:.1f}%")
+        print(f"Predicted Direction: {result['predicted_direction']} "
+              f"({result['direction_confidence']*100:.0f}% confidence)")
+        print("\nIndicators:")
+        for sig in result['signals']:
+            print(f"  • {sig['msg']}")
+        
+        # Make decision
         decision = self.make_decision(result)
+        
         if decision:
-            self._send_telegram_alert(result, decision)
+            print(f"\n💰 RECOMMENDATION: {decision['action']}")
+            print(f"   Reason: {decision['reason']}")
+            print(f"   Risk Level: {decision['risk']}")
+            print(f"{'='*60}\n")
+            
+            # Send to Telegram
+            if self.telegram.enabled:
+                self._send_telegram_alert(result, decision)
     
     def _send_telegram_alert(self, result, decision):
         priority = "critical" if result['confidence'] > 0.8 else "high"
         
         msg = f"<b>{decision['action']}</b>\n\n"
-        msg += f"<b>Market:</b> {result['question'][:60]}\n"
-        msg += f"<b>Price:</b> {result['price']:.3f}\n"
+        msg += f"<b>Market:</b> {result['question'][:70]}\n"
+        msg += f"<b>Price:</b> ${result['price']:.3f}\n"
         msg += f"<b>Confidence:</b> {result['confidence']*100:.0f}%\n"
         msg += f"<b>Direction:</b> {result['predicted_direction']}\n\n"
-        msg += f"<b>Reason:</b> {decision['reason']}"
+        msg += f"<b>Reason:</b> {decision['reason']}\n"
+        msg += f"<b>Risk:</b> {decision['risk']}"
         
         self.telegram.send_alert(msg, priority)
     
@@ -415,38 +519,60 @@ class AdvancedPolymarketBot:
         
         if confidence >= 0.80:
             if direction == 'UP':
-                return {'action': '🟢 STRONG BUY YES', 'reason': 'Strong indicators align', 'risk': 'LOW'}
+                return {
+                    'action': '🟢 STRONG BUY YES',
+                    'reason': 'Multiple strong indicators align',
+                    'risk': 'LOW'
+                }
             elif direction == 'DOWN':
-                return {'action': '🔴 STRONG BUY NO', 'reason': 'Strong indicators align', 'risk': 'LOW'}
+                return {
+                    'action': '🔴 STRONG BUY NO',
+                    'reason': 'Multiple strong indicators align',
+                    'risk': 'LOW'
+                }
+        
         elif confidence >= 0.65:
             if direction == 'UP':
-                return {'action': '🟡 MODERATE BUY YES', 'reason': 'Good confluence', 'risk': 'MEDIUM'}
+                return {
+                    'action': '🟡 MODERATE BUY YES',
+                    'reason': 'Good signal confluence',
+                    'risk': 'MEDIUM'
+                }
             elif direction == 'DOWN':
-                return {'action': '🟡 MODERATE BUY NO', 'reason': 'Good confluence', 'risk': 'MEDIUM'}
+                return {
+                    'action': '🟡 MODERATE BUY NO',
+                    'reason': 'Good signal confluence',
+                    'risk': 'MEDIUM'
+                }
         
-        return None
+        return {
+            'action': '⚪ WATCH',
+            'reason': 'Interesting pattern but wait for stronger confirmation',
+            'risk': 'N/A'
+        }
 
-# ============ RUN ============
+# ============ ENTRY POINT ============
 if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("📱 SETUP INSTRUCTIONS")
-    print("="*60)
-    print("1. Get Telegram bot token from @BotFather")
-    print("2. Get your Chat ID from @userinfobot")
-    print("3. Add them as Replit Secrets:")
-    print("   - Key: TELEGRAM_BOT_TOKEN, Value: your token")
-    print("   - Key: TELEGRAM_CHAT_ID, Value: your chat id")
-    print("="*60 + "\n")
+    # Check configuration
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("\n⚠️  WARNING: Telegram not configured")
+        print("Set these environment variables in Railway:")
+        print("  - TELEGRAM_BOT_TOKEN")
+        print("  - TELEGRAM_CHAT_ID")
+        print("\nBot will still run but won't send notifications.\n")
+        time.sleep(5)
     
-    time.sleep(3)
-    
-    bot = AdvancedPolymarketBot()
+    bot = RailwayPolymarketBot()
     
     try:
         bot.run()
     except KeyboardInterrupt:
-        bot.telegram.send_alert("👋 Bot stopped", "info")
-        print("\n👋 Bot stopped")
+        print("\n\n👋 Bot stopped by user")
+        if bot.telegram.enabled:
+            bot.telegram.send_alert("👋 Bot stopped", "info")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        error_msg = f"❌ Fatal error: {str(e)}"
+        print(f"\n{error_msg}")
+        if bot.telegram.enabled:
+            bot.telegram.send_alert(error_msg, "critical")
         raise
