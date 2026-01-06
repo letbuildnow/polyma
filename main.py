@@ -1,7 +1,7 @@
 """
-RAILWAY-OPTIMIZED POLYMARKET BOT
-Clean version without keep-alive hacks
-Railway handles the infrastructure automatically
+DEBUG VERSION - POLYMARKET BOT
+Lower thresholds to catch more signals
+Adds detailed logging to see what's happening
 """
 
 import requests
@@ -12,25 +12,29 @@ from datetime import datetime
 import os
 import hashlib
 
-# ============ CONFIGURATION ============
-# Railway automatically loads these from environment variables
+# ============ ADJUSTED CONFIGURATION ============
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
-CHECK_INTERVAL = 120
-VOLUME_SPIKE_THRESHOLD = 2.2
-PRICE_MOMENTUM_THRESHOLD = 0.04
-HISTORY_WINDOW = 30
+# LOWERED THRESHOLDS - Will catch more signals
+CHECK_INTERVAL = 90  # Check more frequently (was 120)
+VOLUME_SPIKE_THRESHOLD = 1.5  # Was 2.2 - now more sensitive
+PRICE_MOMENTUM_THRESHOLD = 0.02  # Was 0.04 - catches smaller moves
+HISTORY_WINDOW = 20  # Was 30 - faster signal generation
 
-MIN_VOLUME = 50000
-MAX_VOLUME = 500000
-MIN_LIQUIDITY = 10000
-TARGET_MARKET_COUNT = 7
+# More aggressive market selection
+MIN_VOLUME = 20000  # Was 50k - includes smaller markets
+MAX_VOLUME = 800000  # Was 500k - includes bigger markets too
+MIN_LIQUIDITY = 5000  # Was 10k
+TARGET_MARKET_COUNT = 10  # Was 7 - monitor more markets
 
 ENABLE_TELEGRAM = True
-MIN_CONFIDENCE_ALERT = 0.65
+MIN_CONFIDENCE_ALERT = 0.50  # Was 0.65 - alert on 50%+ confidence
 
-# ============ TELEGRAM NOTIFICATIONS ============
+# DEBUG MODE
+DEBUG_MODE = True  # Shows detailed analysis every cycle
+
+# ============ TELEGRAM ============
 class TelegramNotifier:
     def __init__(self, bot_token, chat_id, enabled=True):
         self.bot_token = bot_token
@@ -45,17 +49,14 @@ class TelegramNotifier:
         try:
             response = requests.get(f"{self.base_url}/getMe", timeout=5)
             if response.status_code == 200:
-                bot_info = response.json()
-                print(f"✅ Telegram connected: @{bot_info['result']['username']}")
+                print("✅ Telegram connected")
                 return True
             else:
-                print("⚠️  Telegram credentials invalid")
+                print("⚠️  Telegram invalid")
                 self.enabled = False
-                return False
         except Exception as e:
-            print(f"⚠️  Telegram connection failed: {e}")
+            print(f"⚠️  Telegram failed: {e}")
             self.enabled = False
-            return False
     
     def send_alert(self, message, priority="normal"):
         if not self.enabled:
@@ -65,30 +66,20 @@ class TelegramNotifier:
         formatted_msg = f"{emoji_map.get(priority, '•')} {message}"
         
         try:
-            payload = {
-                "chat_id": self.chat_id,
-                "text": formatted_msg,
-                "parse_mode": "HTML"
-            }
-            response = requests.post(
-                f"{self.base_url}/sendMessage", 
-                json=payload, 
-                timeout=10
-            )
-            return response.status_code == 200
-        except Exception as e:
-            print(f"❌ Telegram send failed: {e}")
-            return False
+            payload = {"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "HTML"}
+            requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=10)
+        except:
+            pass
 
-# ============ ADVANCED PATTERN ANALYZER ============
+# ============ PATTERN ANALYZER ============
 class AdvancedPatternAnalyzer:
     def __init__(self):
         self.pattern_weights = {
-            'volume_spike': 0.30,
-            'momentum': 0.25,
+            'volume_spike': 0.35,  # Increased weight
+            'momentum': 0.30,      # Increased weight
             'imbalance': 0.20,
-            'spread': 0.10,
-            'acceleration': 0.15
+            'spread': 0.05,
+            'acceleration': 0.10
         }
     
     def calculate_confidence(self, signals, price_history, volume_history):
@@ -99,36 +90,30 @@ class AdvancedPatternAnalyzer:
             strength = signal.get('strength', 0.5)
             
             if sig_type == 'volume_spike':
-                scores['volume_spike'] = min(1.0, (strength - 1) / 3)
+                # More generous scoring
+                scores['volume_spike'] = min(1.0, (strength - 1) / 2)
             elif sig_type == 'momentum':
-                scores['momentum'] = min(1.0, strength / 0.15)
+                scores['momentum'] = min(1.0, strength / 0.10)
             elif sig_type == 'imbalance':
                 scores['imbalance'] = strength
             elif sig_type == 'tight_spread':
                 scores['spread'] = 1.0
         
-        if len(price_history) >= 10:
+        if len(price_history) >= 8:
             scores['acceleration'] = self._calculate_acceleration(price_history)
         
-        total_score = sum(
-            scores.get(key, 0) * weight 
-            for key, weight in self.pattern_weights.items()
-        )
-        
+        total_score = sum(scores.get(key, 0) * weight for key, weight in self.pattern_weights.items())
         signal_count = len(signals)
-        confluence_bonus = min(0.15, (signal_count - 1) * 0.05)
+        confluence_bonus = min(0.20, (signal_count - 1) * 0.07)
         
         return min(1.0, total_score + confluence_bonus)
     
     def _calculate_acceleration(self, prices):
-        recent = list(prices)[-10:]
+        recent = list(prices)[-8:]
         velocities = [recent[i] - recent[i-1] for i in range(1, len(recent))]
         
         if len(velocities) >= 2:
-            accelerations = [
-                velocities[i] - velocities[i-1] 
-                for i in range(1, len(velocities))
-            ]
+            accelerations = [velocities[i] - velocities[i-1] for i in range(1, len(velocities))]
             avg_accel = sum(accelerations) / len(accelerations)
             return min(1.0, abs(avg_accel) * 100)
         return 0
@@ -145,18 +130,15 @@ class AdvancedPatternAnalyzer:
         for sig in imbalance_signals:
             direction_score += 0.7 if sig.get('direction') == 'BUY' else -0.7
         
-        if len(price_history) >= 5:
-            recent = list(price_history)[-5:]
-            trend = sum(
-                1 if recent[i] > recent[i-1] else -1 
-                for i in range(1, 5)
-            )
-            direction_score += trend * 0.3
+        if len(price_history) >= 4:
+            recent = list(price_history)[-4:]
+            trend = sum(1 if recent[i] > recent[i-1] else -1 for i in range(1, 4))
+            direction_score += trend * 0.4
         
-        if direction_score > 0.5:
-            return 'UP', abs(direction_score) / 3
-        elif direction_score < -0.5:
-            return 'DOWN', abs(direction_score) / 3
+        if direction_score > 0.3:
+            return 'UP', min(1.0, abs(direction_score) / 2.5)
+        elif direction_score < -0.3:
+            return 'DOWN', min(1.0, abs(direction_score) / 2.5)
         else:
             return 'NEUTRAL', 0
 
@@ -173,18 +155,13 @@ class MarketDiscovery:
         if cache_key in self.cache:
             cached_time, cached_data = self.cache[cache_key]
             if time.time() - cached_time < self.cache_duration:
-                print("📦 Using cached market list")
                 return cached_data
         
-        print("🔍 Discovering optimal markets...")
+        print("🔍 Discovering markets with LOWER thresholds...")
         
         try:
             url = f"{self.gamma_api}/markets"
-            params = {
-                'active': 'true',
-                'closed': 'false',
-                'limit': 100
-            }
+            params = {'active': 'true', 'closed': 'false', 'limit': 150}
             
             response = requests.get(url, params=params, timeout=15)
             response.raise_for_status()
@@ -210,15 +187,15 @@ class MarketDiscovery:
                                     'liquidity': liquidity,
                                     'score': self._calculate_score(volume, liquidity)
                                 })
-                except (KeyError, ValueError, TypeError):
+                except:
                     continue
             
             candidates.sort(key=lambda x: x['score'], reverse=True)
             selected = candidates[:TARGET_MARKET_COUNT]
             
-            print(f"✅ Found {len(selected)} optimal markets")
+            print(f"✅ Found {len(selected)} markets (expanded criteria)")
             for i, m in enumerate(selected, 1):
-                print(f"   {i}. {m['question'][:55]}...")
+                print(f"   {i}. Vol:${m['volume']/1000:.0f}k - {m['question'][:45]}...")
             
             result_ids = [(m['token_id'], m['question']) for m in selected]
             self.cache[cache_key] = (time.time(), result_ids)
@@ -230,9 +207,10 @@ class MarketDiscovery:
             return []
     
     def _calculate_score(self, volume, liquidity):
-        volume_score = 1 - abs(volume - 200000) / 500000
-        liquidity_score = min(liquidity / 50000, 1.0)
-        return (volume_score * 0.6) + (liquidity_score * 0.4)
+        # Prefer medium-volume markets (more volatile)
+        volume_score = 1 - abs(volume - 150000) / 600000
+        liquidity_score = min(liquidity / 30000, 1.0)
+        return (volume_score * 0.5) + (liquidity_score * 0.5)
 
 # ============ MARKET TRACKER ============
 class MarketTracker:
@@ -241,15 +219,13 @@ class MarketTracker:
         self.question = question
         self.price_history = deque(maxlen=HISTORY_WINDOW)
         self.volume_history = deque(maxlen=HISTORY_WINDOW)
-        self.last_update = None
         self.analyzer = AdvancedPatternAnalyzer()
-        self.consecutive_errors = 0
+        self.data_points = 0
         
     def fetch_market_data(self):
         try:
             url = f"https://clob.polymarket.com/book?token_id={self.token_id}"
             response = requests.get(url, timeout=10)
-            response.raise_for_status()
             data = response.json()
             
             if data.get('bids') and data.get('asks'):
@@ -261,8 +237,6 @@ class MarketTracker:
                 ask_volume = sum(float(a['size']) for a in data['asks'][:15])
                 total_volume = bid_volume + ask_volume
                 
-                self.consecutive_errors = 0  # Reset error counter
-                
                 return {
                     'price': mid_price,
                     'volume': total_volume,
@@ -271,10 +245,8 @@ class MarketTracker:
                     'bid_depth': len(data['bids']),
                     'ask_depth': len(data['asks'])
                 }
-        except Exception as e:
-            self.consecutive_errors += 1
-            if self.consecutive_errors <= 3:
-                print(f"⚠️  Error fetching {self.token_id[:8]}: {e}")
+        except:
+            pass
         return None
     
     def update(self):
@@ -284,9 +256,10 @@ class MarketTracker:
             
         self.price_history.append(data['price'])
         self.volume_history.append(data['volume'])
-        self.last_update = time.time()
+        self.data_points += 1
         
-        if len(self.price_history) < 10:
+        # Need less history now (was 10, now 6)
+        if len(self.price_history) < 6:
             return None
             
         return self.analyze_patterns(data)
@@ -294,68 +267,47 @@ class MarketTracker:
     def analyze_patterns(self, current):
         signals = []
         
-        # Volume Spike Detection
-        if len(self.volume_history) >= 5:
-            recent_avg = statistics.mean(list(self.volume_history)[-5:])
+        # Volume Spike (more sensitive)
+        if len(self.volume_history) >= 4:
+            recent_avg = statistics.mean(list(self.volume_history)[-4:])
             if recent_avg > 0 and current['volume'] > recent_avg * VOLUME_SPIKE_THRESHOLD:
                 signals.append({
                     'type': 'VOLUME_SPIKE',
                     'strength': current['volume'] / recent_avg,
-                    'msg': f"Volume spike: {current['volume']/recent_avg:.1f}x average"
+                    'msg': f"Vol spike: {current['volume']/recent_avg:.1f}x"
                 })
         
-        # Multi-timeframe Momentum
-        if len(self.price_history) >= 10:
+        # Momentum (catches smaller moves)
+        if len(self.price_history) >= 6:
             short_term = list(self.price_history)[-3:]
-            mid_term = list(self.price_history)[-7:]
-            
             short_change = (short_term[-1] - short_term[0]) / max(short_term[0], 0.01)
-            mid_change = (mid_term[-1] - mid_term[0]) / max(mid_term[0], 0.01)
             
             if abs(short_change) > PRICE_MOMENTUM_THRESHOLD:
-                is_accelerating = abs(short_change) > abs(mid_change)
-                
                 signals.append({
                     'type': 'MOMENTUM',
                     'direction': 'UP' if short_change > 0 else 'DOWN',
                     'strength': abs(short_change),
-                    'accelerating': is_accelerating,
-                    'msg': f"{'Accelerating' if is_accelerating else 'Steady'} momentum {short_change*100:+.1f}%"
+                    'msg': f"Momentum {short_change*100:+.1f}%"
                 })
         
-        # Order Book Imbalance
-        if abs(current['imbalance']) > 0.3:
+        # Order Book Imbalance (lower threshold)
+        if abs(current['imbalance']) > 0.25:  # Was 0.3
             side = 'BUY' if current['imbalance'] > 0 else 'SELL'
             signals.append({
                 'type': 'IMBALANCE',
                 'direction': side,
                 'strength': abs(current['imbalance']),
-                'msg': f"Order book: {abs(current['imbalance'])*100:.0f}% {side} side"
+                'msg': f"Book: {abs(current['imbalance'])*100:.0f}% {side}"
             })
         
-        # Tight Spread
-        if current['spread'] < 0.02:
-            signals.append({
-                'type': 'TIGHT_SPREAD',
-                'msg': f"Tight spread: {current['spread']*100:.2f}%"
-            })
+        # Spread
+        if current['spread'] < 0.03:  # Was 0.02 - more lenient
+            signals.append({'type': 'TIGHT_SPREAD', 'msg': "Good spread"})
         
-        # Deep Book
-        total_depth = current['bid_depth'] + current['ask_depth']
-        if total_depth > 30:
-            signals.append({
-                'type': 'DEEP_BOOK',
-                'msg': f"Deep order book: {total_depth} levels"
-            })
-        
-        if signals:
-            confidence = self.analyzer.calculate_confidence(
-                signals, self.price_history, self.volume_history
-            )
-            
-            direction, dir_confidence = self.analyzer.predict_direction(
-                signals, self.price_history
-            )
+        # Return even weak signals in debug mode
+        if signals or DEBUG_MODE:
+            confidence = self.analyzer.calculate_confidence(signals, self.price_history, self.volume_history)
+            direction, dir_conf = self.analyzer.predict_direction(signals, self.price_history)
             
             return {
                 'token_id': self.token_id,
@@ -364,59 +316,48 @@ class MarketTracker:
                 'signals': signals,
                 'confidence': confidence,
                 'predicted_direction': direction,
-                'direction_confidence': dir_confidence,
+                'direction_confidence': dir_conf,
+                'data_points': self.data_points,
                 'timestamp': time.time()
             }
         
         return None
 
-# ============ MAIN BOT ============
-class RailwayPolymarketBot:
+# ============ DEBUG BOT ============
+class DebugPolymarketBot:
     def __init__(self):
         self.discovery = MarketDiscovery()
         self.trackers = []
-        self.telegram = TelegramNotifier(
-            TELEGRAM_BOT_TOKEN, 
-            TELEGRAM_CHAT_ID, 
-            ENABLE_TELEGRAM
-        )
+        self.telegram = TelegramNotifier(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, ENABLE_TELEGRAM)
         self.cycle = 0
         self.last_discovery = 0
         self.discovery_interval = 3600
         self.alert_history = set()
-        self.start_time = time.time()
         
     def initialize(self):
         print("\n" + "="*60)
-        print("🚂 POLYMARKET BOT - RAILWAY EDITION")
+        print("🐛 DEBUG MODE - POLYMARKET BOT")
         print("="*60)
-        print(f"Telegram: {'✅ Connected' if self.telegram.enabled else '❌ Not configured'}")
+        print(f"Volume Threshold: {VOLUME_SPIKE_THRESHOLD}x (lowered from 2.2x)")
+        print(f"Momentum Threshold: {PRICE_MOMENTUM_THRESHOLD*100:.1f}% (lowered from 4%)")
+        print(f"Min Confidence: {MIN_CONFIDENCE_ALERT*100:.0f}% (lowered from 65%)")
         print(f"Check Interval: {CHECK_INTERVAL}s")
-        print(f"Min Confidence: {MIN_CONFIDENCE_ALERT*100:.0f}%")
+        print(f"Markets: {TARGET_MARKET_COUNT} (increased from 7)")
         print("="*60 + "\n")
         
         if self.telegram.enabled:
-            self.telegram.send_alert(
-                "🚂 Bot deployed on Railway and monitoring markets", 
-                "info"
-            )
+            self.telegram.send_alert("🐛 Debug bot started - Lower thresholds active", "info")
         
         self.refresh_markets()
     
     def refresh_markets(self):
         market_data = self.discovery.discover_markets()
-        
         if not market_data:
-            print("⚠️  No markets found, will retry next cycle")
             return
         
-        self.trackers = [
-            MarketTracker(token_id, question) 
-            for token_id, question in market_data
-        ]
-        
+        self.trackers = [MarketTracker(tid, q) for tid, q in market_data]
         self.last_discovery = time.time()
-        print(f"\n✅ Now monitoring {len(self.trackers)} markets\n")
+        print(f"\n✅ Tracking {len(self.trackers)} markets\n")
     
     def run(self):
         self.initialize()
@@ -426,90 +367,84 @@ class RailwayPolymarketBot:
                 self.cycle += 1
                 now = time.time()
                 
-                # Refresh market list every hour
                 if now - self.last_discovery > self.discovery_interval:
-                    print("\n🔄 Refreshing market list...")
+                    print("\n🔄 Refreshing markets...")
                     self.refresh_markets()
                 
-                # Status update
-                uptime = (now - self.start_time) / 3600
-                print(f"\n[Cycle {self.cycle}] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"Uptime: {uptime:.1f}h | Tracking: {len(self.trackers)} markets")
+                print(f"\n[Cycle {self.cycle}] {datetime.now().strftime('%H:%M:%S')}")
                 print("-" * 60)
                 
-                # Scan all markets
-                signals_found = 0
-                for tracker in self.trackers:
+                # Track statistics
+                total_signals = 0
+                high_conf_signals = 0
+                
+                for i, tracker in enumerate(self.trackers):
                     result = tracker.update()
-                    if result and result['confidence'] >= MIN_CONFIDENCE_ALERT:
-                        self.handle_signal(result)
-                        signals_found += 1
+                    
+                    if result:
+                        total_signals += 1
+                        
+                        # Show ALL signals in debug mode
+                        if DEBUG_MODE and result['signals']:
+                            print(f"\n📊 Market {i+1}: {result['question'][:40]}...")
+                            print(f"   Price: {result['price']:.3f} | Confidence: {result['confidence']*100:.0f}%")
+                            print(f"   Data Points: {result['data_points']} | Signals: {len(result['signals'])}")
+                            for sig in result['signals']:
+                                print(f"   • {sig['msg']}")
+                        
+                        # Handle high confidence signals
+                        if result['confidence'] >= MIN_CONFIDENCE_ALERT:
+                            high_conf_signals += 1
+                            self.handle_signal(result)
                 
-                if signals_found == 0:
-                    print("✓ No high-confidence signals this cycle")
+                print(f"\n📈 Cycle Summary:")
+                print(f"   Signals detected: {total_signals}")
+                print(f"   High confidence: {high_conf_signals}")
+                print(f"   Next check: {CHECK_INTERVAL}s")
                 
-                print(f"\n⏳ Next check in {CHECK_INTERVAL}s...")
                 time.sleep(CHECK_INTERVAL)
                 
             except KeyboardInterrupt:
                 raise
             except Exception as e:
-                print(f"\n❌ Error in main loop: {e}")
-                print("Continuing in 30 seconds...")
+                print(f"\n❌ Error: {e}")
                 time.sleep(30)
     
     def handle_signal(self, result):
-        # Create unique alert ID to prevent spam
-        alert_id = hashlib.md5(
-            f"{result['token_id']}{result['confidence']:.2f}".encode()
-        ).hexdigest()[:8]
+        alert_id = hashlib.md5(f"{result['token_id']}{result['confidence']:.1f}".encode()).hexdigest()[:8]
         
-        # Check if we already alerted recently
         if alert_id in self.alert_history:
             return
         
         self.alert_history.add(alert_id)
         
-        # Clean old alerts (keep only last 50)
-        if len(self.alert_history) > 50:
-            self.alert_history = set(list(self.alert_history)[-50:])
-        
-        # Console output
         print(f"\n{'='*60}")
-        print("🚨 HIGH CONFIDENCE SIGNAL DETECTED")
+        print("🚨 HIGH CONFIDENCE SIGNAL")
         print(f"{'='*60}")
-        print(f"Market: {result['question']}")
+        print(f"{result['question']}")
         print(f"Price: ${result['price']:.3f}")
-        print(f"Confidence: {result['confidence']*100:.1f}%")
-        print(f"Predicted Direction: {result['predicted_direction']} "
-              f"({result['direction_confidence']*100:.0f}% confidence)")
-        print("\nIndicators:")
-        for sig in result['signals']:
-            print(f"  • {sig['msg']}")
+        print(f"Confidence: {result['confidence']*100:.0f}%")
+        print(f"Direction: {result['predicted_direction']}")
         
-        # Make decision
         decision = self.make_decision(result)
         
         if decision:
-            print(f"\n💰 RECOMMENDATION: {decision['action']}")
-            print(f"   Reason: {decision['reason']}")
-            print(f"   Risk Level: {decision['risk']}")
+            print(f"\n💰 {decision['action']}")
+            print(f"Reason: {decision['reason']}")
             print(f"{'='*60}\n")
             
-            # Send to Telegram
             if self.telegram.enabled:
                 self._send_telegram_alert(result, decision)
     
     def _send_telegram_alert(self, result, decision):
-        priority = "critical" if result['confidence'] > 0.8 else "high"
+        priority = "critical" if result['confidence'] > 0.75 else "high"
         
         msg = f"<b>{decision['action']}</b>\n\n"
         msg += f"<b>Market:</b> {result['question'][:70]}\n"
         msg += f"<b>Price:</b> ${result['price']:.3f}\n"
         msg += f"<b>Confidence:</b> {result['confidence']*100:.0f}%\n"
         msg += f"<b>Direction:</b> {result['predicted_direction']}\n\n"
-        msg += f"<b>Reason:</b> {decision['reason']}\n"
-        msg += f"<b>Risk:</b> {decision['risk']}"
+        msg += f"<b>Reason:</b> {decision['reason']}"
         
         self.telegram.send_alert(msg, priority)
     
@@ -517,62 +452,30 @@ class RailwayPolymarketBot:
         confidence = result['confidence']
         direction = result['predicted_direction']
         
-        if confidence >= 0.80:
+        if confidence >= 0.75:
             if direction == 'UP':
-                return {
-                    'action': '🟢 STRONG BUY YES',
-                    'reason': 'Multiple strong indicators align',
-                    'risk': 'LOW'
-                }
+                return {'action': '🟢 STRONG BUY YES', 'reason': 'Strong indicators'}
             elif direction == 'DOWN':
-                return {
-                    'action': '🔴 STRONG BUY NO',
-                    'reason': 'Multiple strong indicators align',
-                    'risk': 'LOW'
-                }
+                return {'action': '🔴 STRONG BUY NO', 'reason': 'Strong indicators'}
         
-        elif confidence >= 0.65:
+        elif confidence >= 0.50:
             if direction == 'UP':
-                return {
-                    'action': '🟡 MODERATE BUY YES',
-                    'reason': 'Good signal confluence',
-                    'risk': 'MEDIUM'
-                }
+                return {'action': '🟡 MODERATE BUY YES', 'reason': 'Good signals'}
             elif direction == 'DOWN':
-                return {
-                    'action': '🟡 MODERATE BUY NO',
-                    'reason': 'Good signal confluence',
-                    'risk': 'MEDIUM'
-                }
+                return {'action': '🟡 MODERATE BUY NO', 'reason': 'Good signals'}
         
-        return {
-            'action': '⚪ WATCH',
-            'reason': 'Interesting pattern but wait for stronger confirmation',
-            'risk': 'N/A'
-        }
+        return None
 
-# ============ ENTRY POINT ============
+# ============ RUN ============
 if __name__ == "__main__":
-    # Check configuration
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("\n⚠️  WARNING: Telegram not configured")
-        print("Set these environment variables in Railway:")
-        print("  - TELEGRAM_BOT_TOKEN")
-        print("  - TELEGRAM_CHAT_ID")
-        print("\nBot will still run but won't send notifications.\n")
-        time.sleep(5)
-    
-    bot = RailwayPolymarketBot()
+    bot = DebugPolymarketBot()
     
     try:
         bot.run()
     except KeyboardInterrupt:
-        print("\n\n👋 Bot stopped by user")
+        print("\n👋 Stopped")
         if bot.telegram.enabled:
-            bot.telegram.send_alert("👋 Bot stopped", "info")
+            bot.telegram.send_alert("👋 Debug bot stopped", "info")
     except Exception as e:
-        error_msg = f"❌ Fatal error: {str(e)}"
-        print(f"\n{error_msg}")
-        if bot.telegram.enabled:
-            bot.telegram.send_alert(error_msg, "critical")
+        print(f"❌ Error: {e}")
         raise
